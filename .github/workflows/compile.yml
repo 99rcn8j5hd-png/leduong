@@ -55,6 +55,7 @@ jobs:
 
       - name: Build Packages
         run: |
+          perl -pi -e 's/\r$//' devkit/*.sh devkit/*.swift Makefile
           chmod +x TrollFools/chown TrollFools/cp TrollFools/cp-15 TrollFools/ct_bypass TrollFools/insert_dylib TrollFools/install_name_tool TrollFools/ldid TrollFools/libcrypto.3.dylib TrollFools/libxar.1.dylib TrollFools/mkdir TrollFools/mv TrollFools/mv-15 TrollFools/optool TrollFools/rm devkit/bump-version.sh devkit/crop-app-icon.swift devkit/print-version.sh devkit/rootless.sh devkit/standardize-entitlements.sh devkit/tipa.sh
           make package
           cp packages/*.tipa .
