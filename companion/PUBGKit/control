@@ -1,0 +1,9 @@
+Package: com.zaka.pubgkit
+Name: PUBGKit
+Version: 0.2.0
+Architecture: iphoneos-arm64
+Description: Experimental in-process overlay and diagnostics; game-build compatibility unverified.
+Maintainer: zaka
+Author: zaka
+Section: Tweaks
+Depends: firmware (>= 15.0), mobilesubstrate

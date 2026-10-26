@@ -1,0 +1,9 @@
+Package: vn.leduong.loader
+Name: leduong
+Version: 1.0.0-1
+Section: Applications
+Depends: firmware (>= 14.0)
+Architecture: iphoneos-arm64
+Author: Lessica <82flex@gmail.com>
+Maintainer: Lessica <82flex@gmail.com>
+Description: Local plugin loader based on TrollFools, without account or device activation.

@@ -1,0 +1,21 @@
+[
+  "control",
+  "LEDUONG_PROVENANCE.json",
+  "Makefile",
+  "README_LEDUONG_VI.md",
+  ".github/workflows/compile.yml",
+  "devkit/tipa.sh",
+  "TrollFools/AppListView.swift",
+  "TrollFools/CheckUpdateManager.swift",
+  "TrollFools/Constants.swift",
+  "TrollFools/DisclaimerView.swift",
+  "TrollFools/Info.plist",
+  "TrollFools/TrollFools.entitlements",
+  "TrollFools/Version.xcconfig",
+  "TrollFools/en.lproj/InfoPlist.strings",
+  "TrollFools/en.lproj/Localizable.strings",
+  "TrollFools/it.lproj/InfoPlist.strings",
+  "TrollFools/vi.lproj/InfoPlist.strings",
+  "TrollFools.xcodeproj/project.pbxproj",
+  "TrollFools.xcodeproj/xcshareddata/xcschemes/TrollFools.xcscheme"
+]

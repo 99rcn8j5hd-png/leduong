@@ -1,0 +1,54 @@
+// Stealth.mm - (tuỳ chọn, mặc định TẮT) ẩn image của mình khỏi _dyld_image_count
+// Bật bằng key "hideImage" = true trong offsets.plist? -> xem Menu/Probe.
+// Không bật mặc định vì nếu hook sai thứ tự index sẽ làm app crash.
+#import <Foundation/Foundation.h>
+#import <mach-o/dyld.h>
+#import <substrate.h>
+#include <dlfcn.h>
+#include <string.h>
+
+static uint32_t (*orig_count)(void) = NULL;
+static const char* (*orig_name)(uint32_t) = NULL;
+static const struct mach_header* (*orig_header)(uint32_t) = NULL;
+static int g_ourIdx = -1;
+static volatile bool g_hide = false;
+
+static void findOurIndex(void) {
+    uint32_t n = orig_count ? orig_count() : _dyld_image_count();
+    for (uint32_t i = 0; i < n; i++) {
+        const char* p = _dyld_get_image_name(i);
+        if (!p) continue;
+        if (strstr(p, "PUBGKit")) { g_ourIdx = (int)i; return; }
+    }
+}
+
+static uint32_t my_count(void) {
+    uint32_t n = orig_count();
+    if (!g_hide || g_ourIdx < 0 || n == 0) return n;
+    return n - 1;
+}
+
+static const char* my_name(uint32_t i) {
+    if (g_hide && g_ourIdx >= 0 && (int)i >= g_ourIdx) return orig_name(i + 1);
+    return orig_name(i);
+}
+
+static const struct mach_header* my_header(uint32_t i) {
+    if (g_hide && g_ourIdx >= 0 && (int)i >= g_ourIdx) return orig_header(i + 1);
+    return orig_header(i);
+}
+
+void stealthEnable(bool on) {
+    if (on && !orig_count) {
+        void* c = dlsym(RTLD_DEFAULT, "_dyld_image_count");
+        void* n = dlsym(RTLD_DEFAULT, "_dyld_get_image_name");
+        void* h = dlsym(RTLD_DEFAULT, "_dyld_get_image_header");
+        if (!c || !n || !h) return;
+        MSHookFunction(c, (void*)my_count, (void**)&orig_count);
+        MSHookFunction(n, (void*)my_name, (void**)&orig_name);
+        MSHookFunction(h, (void*)my_header, (void**)&orig_header);
+        findOurIndex();
+        g_hide = true;
+    }
+    g_hide = on;
+}

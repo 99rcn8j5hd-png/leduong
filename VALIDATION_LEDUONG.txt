@@ -1,0 +1,4 @@
+PASS: display name and bundle IDs; entitlements parsed; shared scheme XML parsed.
+PASS: upstream LICENSE retained; injection/ejection/backup sources byte-for-byte unchanged.
+PASS: no APIAuthManager or URLSession call in loader Swift sources; remote update implementation replaced by local no-op.
+NOT RUN: Xcode compilation, Swift package resolution, code signing, .tipa/.deb generation, iPhone tests.

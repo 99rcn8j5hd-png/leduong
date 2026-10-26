@@ -1,0 +1,9 @@
+{
+  "upstream": "https://github.com/Lessica/TrollFools",
+  "commit": "c5c87b859a9ee34d215548377273eddd34a7c7f6",
+  "license": "MIT",
+  "display_name": "leduong",
+  "bundle_id": "vn.leduong.loader",
+  "runtime_activation": "none",
+  "binary_build_status": "not built; macOS/Xcode required"
+}

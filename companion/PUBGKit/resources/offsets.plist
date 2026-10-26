@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Experimental defaults. No game-build compatibility has been verified. -->
+
+	<key>GNames</key>            <integer>0</integer>
+	<key>GObjects</key>          <integer>0</integer>
+	<key>GEngine</key>           <integer>0</integer>
+
+	<key>className</key>         <integer>0</integer>
+	<key>objItemStride</key>     <integer>24</integer>
+	<key>nameChunkSize</key>     <integer>16384</integer>
+
+	<key>worldPersistentLevel</key>  <integer>0</integer>
+	<key>levelActors</key>           <integer>0</integer>
+	<key>controllerCameraMgr</key>   <integer>0</integer>
+	<key>cameraMgrCache</key>        <integer>0</integer>
+	<key>controllerPawn</key>        <integer>0</integer>
+
+	<key>actorRootComponent</key>    <integer>0</integer>
+	<key>sceneLocation</key>         <integer>0</integer>
+	<key>actorPlayerState</key>      <integer>0</integer>
+	<key>psTeam</key>                <integer>0</integer>
+	<key>psName</key>                <integer>0</integer>
+
+	<key>charHealth</key>            <integer>0</integer>
+	<key>healthIsInt</key>           <integer>0</integer>
+	<key>charMesh</key>              <integer>0</integer>
+	<key>meshBoneArray</key>         <integer>0</integer>
+	<key>boneStride</key>            <integer>48</integer>
+	<key>boneTransOff</key>          <integer>16</integer>
+
+	<!-- 0 = chỉ tính góc, KHÔNG ghi vào game. Điền offset FRotator ControlRotation
+	     (trong PlayerController) để aimbot thật sự xoay camera. -->
+	<key>controllerControlRotation</key> <integer>0</integer>
+</dict>
+</plist>

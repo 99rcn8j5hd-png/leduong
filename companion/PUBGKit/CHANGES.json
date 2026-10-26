@@ -1,0 +1,29 @@
+{
+  "original_zip_sha256": "cac47b748668114f14ccd71ff55fa79bc9ad66d5e9ca616779927547d1f0a09d",
+  "changed": [
+    "control",
+    "Makefile",
+    "README.md",
+    "resources/offsets.plist",
+    "src/Aimbot.mm",
+    "src/Core.cpp",
+    "src/Core.hpp",
+    "src/ESP.mm",
+    "src/Mem.cpp",
+    "src/Mem.hpp",
+    "src/Menu.mm",
+    "src/Offsets.hpp",
+    "src/Probe.mm",
+    "src/UE.hpp"
+  ],
+  "added": [
+    "reference/README_original.md",
+    "reference/Stealth.mm.disabled",
+    "scripts/verify_source.py",
+    "tests/math_test.cpp"
+  ],
+  "relocated": {
+    "pubgkit/src/Stealth.mm": "reference/Stealth.mm.disabled",
+    "pubgkit/README.md": "reference/README_original.md"
+  }
+}

@@ -1,0 +1,2 @@
+PASS: source inventory, rootless settings, metadata, resource plist and Objective-C block inventory
+NOT RUN: C++ test, iOS compilation/link, .deb packaging, device/runtime validation
