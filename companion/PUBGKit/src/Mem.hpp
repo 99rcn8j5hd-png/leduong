@@ -2,7 +2,7 @@
 #pragma once
 #include <mach/mach.h>
 #include <mach/vm_map.h>
-#include <mach/mach_vm.h>
+#include <mach/vm_region.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>

@@ -2,13 +2,13 @@
 
 bool memRead(uintptr_t addr, void* out, size_t len) {
     if (!addr || !out || !len || len > UINTPTR_MAX-addr) return false;
-    mach_vm_size_t got = 0;
-    kern_return_t kr = mach_vm_read_overwrite(mach_task_self(),
-                                              (mach_vm_address_t)addr,
-                                              (mach_vm_size_t)len,
-                                              (mach_vm_address_t)(uintptr_t)out,
+    vm_size_t got = 0;
+    kern_return_t kr = vm_read_overwrite(mach_task_self(),
+                                              (vm_address_t)addr,
+                                              (vm_size_t)len,
+                                              (vm_address_t)(uintptr_t)out,
                                               &got);
-    return kr == KERN_SUCCESS && got == (mach_vm_size_t)len;
+    return kr == KERN_SUCCESS && got == (vm_size_t)len;
 }
 
 bool memWrite(uintptr_t addr, const void* in, size_t len) {
@@ -18,12 +18,12 @@ bool memWrite(uintptr_t addr, const void* in, size_t len) {
     if (pageEnd < addr || pageEnd <= pageStart) return false;
     vm_size_t span = (vm_size_t)(pageEnd - pageStart);
 
-    mach_vm_address_t regionStart = (mach_vm_address_t)pageStart;
-    mach_vm_size_t regionSize = 0;
+    vm_address_t regionStart = (vm_address_t)pageStart;
+    vm_size_t regionSize = 0;
     vm_region_basic_info_data_64_t info = {};
     mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t object = MACH_PORT_NULL;
-    kern_return_t query = mach_vm_region(mach_task_self(), &regionStart, &regionSize,
+    kern_return_t query = vm_region_64(mach_task_self(), &regionStart, &regionSize,
         VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count, &object);
     if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
     if (query != KERN_SUCCESS || regionStart > pageStart ||
