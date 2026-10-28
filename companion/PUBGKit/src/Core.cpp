@@ -199,7 +199,23 @@ static bool tryGNames(uintptr_t chunksBase) {
         if (nameFromEntry(e, s, sizeof(s)) && s[0] &&
             (isalpha((unsigned char)s[0]) || s[0] == '_')) ok++;
     }
-    if (ok < 7) { g_nameOff=saveOff; g_wide=saveWide; g_nameScoreFailures++; return false; }
+    if (ok < 7) {
+        // Diagnostic samples only. Do not weaken the acceptance threshold.
+        if (g_nameScoreFailures < 8) {
+            zkLog("[diag-v3] candidate=%llu chunkSize=%d nameOffset=%d wide=%d validNames=%d/12",
+                  (unsigned long long)(g_nameScoreFailures+1),g_off.nameChunkSize,g_nameOff,g_wide?1:0,ok);
+            for (uint32_t sample=0; sample<=12; sample++) {
+                uintptr_t sampleEntry=0;
+                bool entryOK=entryAt(chunksBase,sample,&sampleEntry);
+                char sampleName[80]={0};
+                bool nameOK=entryOK && nameFromEntry(sampleEntry,sampleName,sizeof(sampleName));
+                zkLog("[diag-v3] index=%u entryReadable=%d nameValid=%d name=%s",
+                      sample,entryOK?1:0,nameOK?1:0,nameOK?sampleName:"<invalid>");
+            }
+        }
+        g_nameOff=saveOff; g_wide=saveWide; g_nameScoreFailures++;
+        return false;
+    }
     return true;
 }
 
