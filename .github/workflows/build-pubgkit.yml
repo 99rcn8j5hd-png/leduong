@@ -1,0 +1,74 @@
+name: Build PUBGKit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-plugin:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          echo /opt/homebrew/opt/make/libexec/gnubin >> "$GITHUB_PATH"
+          echo /usr/local/opt/make/libexec/gnubin >> "$GITHUB_PATH"
+          brew install dpkg ldid-procursus make
+
+      - name: Checkout Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          ref: 942cd0c015f93d8c2d714ba0c69e7f420157c382
+          path: theos
+          submodules: recursive
+
+      - name: Checkout SDKs
+        uses: actions/checkout@v4
+        with:
+          repository: theos/sdks
+          path: theos/sdks
+
+      - name: Configure build
+        run: |
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> "$GITHUB_ENV"
+          echo "THEOS_PACKAGE_SCHEME=rootless" >> "$GITHUB_ENV"
+          echo "FINALPACKAGE=1" >> "$GITHUB_ENV"
+          test -f companion/PUBGKit/Makefile
+          test -f companion/PUBGKit/Tweak.xm
+
+      - name: Build plugin
+        working-directory: companion/PUBGKit
+        run: |
+          perl -pi -e 's/\r$//' Makefile control Tweak.xm src/*
+          python3 scripts/verify_source.py
+          c++ -std=c++17 tests/math_test.cpp -o "$RUNNER_TEMP/pubgkit-math-test"
+          "$RUNNER_TEMP/pubgkit-math-test"
+          make clean
+          make package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+          plugin_path=$(find .theos/_ -type f -name PUBGKit.dylib -print -quit)
+          test -n "$plugin_path"
+          cp "$plugin_path" packages/PUBGKit.dylib
+          lipo -info packages/PUBGKit.dylib
+          otool -L packages/PUBGKit.dylib
+          shasum -a 256 packages/PUBGKit.dylib > packages/SHA256.txt
+
+      - name: Upload plugin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PUBGKit-plugin
+          path: |
+            companion/PUBGKit/packages/PUBGKit.dylib
+            companion/PUBGKit/packages/*.deb
+            companion/PUBGKit/packages/SHA256.txt
+          if-no-files-found: error
