@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <functional>
+#include <algorithm>
 
 Offsets g_off;
 Config g_cfg;
@@ -37,6 +38,9 @@ static uintptr_t g_world = 0, g_pc = 0, g_camMgr = 0, g_selfPawn = 0;
 static uintptr_t g_level = 0;
 static int       g_actorCount = 0;
 static bool      g_ready = false;
+static bool g_objectsChunked = false;
+static uint64_t g_nameTrials=0, g_nameEntryFailures=0, g_nameLayoutFailures=0;
+static uint64_t g_nameTextFailures=0, g_nameScoreFailures=0;
 
 // ------------------------------------------------------------------ images
 static void collectImages(void) {
@@ -77,19 +81,47 @@ static void collectImages(void) {
 
 static void scanDataWords(const std::function<bool(uintptr_t addr, uintptr_t value)>& cb,
                           bool preferUEOnly) {
-    for (size_t k = 0; k < g_imgs.size(); k++) {
-        Img& img = g_imgs[k];
+    uint64_t readable=0, unreadable=0, candidates=0;
+    for (const Img& img : g_imgs) {
         if (preferUEOnly && img.path.find("UE4") == std::string::npos) continue;
-        for (size_t j = 0; j < img.data.size(); j++) {
-            uintptr_t s = img.data[j].start, e = img.data[j].end;
-            for (uintptr_t p = (s + 7) & ~(uintptr_t)7; p + 8 <= e; p += 8) {
-                uintptr_t v = 0;
-                if (!memRead(p, &v, 8)) continue;
-                if (!looksLikePtr(v)) continue;
-                if (cb(p, v)) return;
+        // Read blocks rather than making a kernel call for every eight-byte word.
+        for (const Seg& seg : img.data) {
+            uintptr_t cursor=(seg.start+7)&~(uintptr_t)7;
+            while (cursor<seg.end && seg.end-cursor>=8) {
+                uintptr_t words[512];
+                size_t bytes=std::min((size_t)(seg.end-cursor),sizeof(words));
+                bytes-=bytes%8;
+                if (memRead(cursor,words,bytes)) {
+                    readable+=bytes/8;
+                    for (size_t i=0; i<bytes/8; i++) {
+                        uintptr_t value=words[i];
+                        if (!looksLikePtr(value)) continue;
+                        candidates++;
+                        if (cb(cursor+i*8,value)) {
+                            zkLog("[diag] scan matched image=%s readable=%llu candidates=%llu",img.path.c_str(),(unsigned long long)readable,(unsigned long long)candidates);
+                            return;
+                        }
+                    }
+                } else {
+                    // A block may straddle an unreadable mapping. Retain the original
+                    // word-by-word fallback instead of discarding the complete block.
+                    for (size_t i=0; i<bytes/8; i++) {
+                        uintptr_t value=0;
+                        if (!memRead(cursor+i*8,&value,sizeof(value))) { unreadable++; continue; }
+                        readable++;
+                        if (!looksLikePtr(value)) continue;
+                        candidates++;
+                        if (cb(cursor+i*8,value)) {
+                            zkLog("[diag] scan matched image=%s",img.path.c_str());
+                            return;
+                        }
+                    }
+                }
+                cursor+=bytes;
             }
         }
     }
+    zkLog("[diag] scan exhausted images=%zu readableWords=%llu unreadableWords=%llu pointerCandidates=%llu",g_imgs.size(),(unsigned long long)readable,(unsigned long long)unreadable,(unsigned long long)candidates);
 }
 
 // ------------------------------------------------------------------ FName
@@ -147,14 +179,16 @@ static bool detectLayout(uintptr_t entry) {
 }
 
 static bool tryGNames(uintptr_t chunksBase) {
+    g_nameTrials++;
     uintptr_t e0 = 0;
-    if (!entryAt(chunksBase, 0, &e0)) return false;
+    if (!entryAt(chunksBase, 0, &e0)) { g_nameEntryFailures++; return false; }
     int saveOff = g_nameOff;
     bool saveWide = g_wide;
-    if (g_nameOff < 0 && !detectLayout(e0)) return false;
+    if (g_nameOff < 0 && !detectLayout(e0)) { g_nameLayoutFailures++; return false; }
     char nm[80];
     if (!nameFromEntry(e0, nm, sizeof(nm)) || strcmp(nm, "None") != 0) {
         g_nameOff = saveOff; g_wide = saveWide;
+        g_nameTextFailures++;
         return false;
     }
     int ok = 0;
@@ -165,7 +199,7 @@ static bool tryGNames(uintptr_t chunksBase) {
         if (nameFromEntry(e, s, sizeof(s)) && s[0] &&
             (isalpha((unsigned char)s[0]) || s[0] == '_')) ok++;
     }
-    if (ok < 7) { g_nameOff=saveOff; g_wide=saveWide; return false; }
+    if (ok < 7) { g_nameOff=saveOff; g_wide=saveWide; g_nameScoreFailures++; return false; }
     return true;
 }
 
@@ -209,16 +243,18 @@ static bool classIdxName(uintptr_t obj, int cOff, char* out, size_t cap) {
     return nameOfIndex(idx, out, cap);
 }
 
-static bool tryObjects(uintptr_t fieldAddr, uintptr_t chunks) {
+static bool tryObjectItems(uintptr_t fieldAddr, uintptr_t chunks, bool chunked) {
+    uintptr_t items=chunked ? rdPtr(chunks) : chunks;
+    if (!looksLikePtr(items)) return false;
     static const int strides[] = { 0x18, 0x10, 0x20 };
     static const int coffs[]   = { 0x10, 0x08, 0x18, 0x20 };
 
-    uintptr_t o0 = rdPtr(chunks);
+    uintptr_t o0 = rdPtr(items);
     if (!looksLikePtr(o0)) return false;
 
     for (int si = 0; si < 3; si++) {
         int stride = strides[si];
-        uintptr_t o1 = rdPtr(chunks + stride);
+        uintptr_t o1 = rdPtr(items + stride);
         if (!looksLikePtr(o1)) continue;
         for (int ci = 0; ci < 4; ci++) {
             int cOff = coffs[ci];
@@ -229,7 +265,7 @@ static bool tryObjects(uintptr_t fieldAddr, uintptr_t chunks) {
 
             int score = 0;
             for (int i = 0; i < 24; i++) {
-                uintptr_t o = rdPtr(chunks + (uintptr_t)(i * stride));
+                uintptr_t o = rdPtr(items + (uintptr_t)(i * stride));
                 char nm[64];
                 if (looksLikePtr(o) && classIdxName(o, cOff, nm, sizeof(nm))) score++;
             }
@@ -241,6 +277,8 @@ static bool tryObjects(uintptr_t fieldAddr, uintptr_t chunks) {
 
             g_objField   = fieldAddr;
             g_objChunks  = chunks;
+            g_objectsChunked = chunked;
+            g_off.GObjects = fieldAddr;
             g_classOff   = cOff;
             g_numObjects = num;
             g_off.className     = cOff;
@@ -249,6 +287,19 @@ static bool tryObjects(uintptr_t fieldAddr, uintptr_t chunks) {
         }
     }
     return false;
+}
+
+static bool tryObjects(uintptr_t fieldAddr, uintptr_t chunks) {
+    return tryObjectItems(fieldAddr,chunks,false) || tryObjectItems(fieldAddr,chunks,true);
+}
+
+static uintptr_t objectItem(int i) {
+    if (!g_objChunks || i<0 || g_off.objItemStride<=0) return 0;
+    int size=g_off.objChunkSize>0 ? g_off.objChunkSize : 65536;
+    uintptr_t items=g_objectsChunked ? rdPtr(g_objChunks+(uintptr_t)(i/size)*8) : g_objChunks;
+    if (!looksLikePtr(items)) return 0;
+    uintptr_t index=g_objectsChunked ? (uintptr_t)(i%size) : (uintptr_t)i;
+    return rdPtr(items+index*(uintptr_t)g_off.objItemStride);
 }
 
 static bool discoverGObjects(void) {
@@ -265,10 +316,7 @@ int objCount(void) {
     if (g_numObjects > 0) return g_numObjects;
     int i = 0;
     while (i < 4000000) {
-        uintptr_t o = 0;
-        uintptr_t chunk = rdPtr(g_objChunks + (uintptr_t)(i / 65536) * 8);
-        if (!looksLikePtr(chunk)) break;
-        o = rdPtr(chunk + (uintptr_t)(i % 65536) * (uintptr_t)g_off.objItemStride);
+        uintptr_t o = objectItem(i);
         if (!looksLikePtr(o)) break;
         i++;
     }
@@ -278,10 +326,7 @@ int objCount(void) {
 
 uintptr_t objAt(int i) {
     std::lock_guard<std::recursive_mutex> runtimeLock(g_coreMutex);
-    if (!g_objChunks || i < 0) return 0;
-    uintptr_t chunk = rdPtr(g_objChunks + (uintptr_t)(i / 65536) * 8);
-    if (!looksLikePtr(chunk)) return 0;
-    return rdPtr(chunk + (uintptr_t)(i % 65536) * (uintptr_t)g_off.objItemStride);
+    return objectItem(i);
 }
 
 bool classNameOf(uintptr_t obj, char* out, size_t cap) {
@@ -548,11 +593,25 @@ bool coreInit(bool force) {
     if (force) {
         g_off=configured;
         g_nameOff=-1; g_wide=false; g_nameChunks=0;
-        g_objField=0; g_objChunks=0; g_numObjects=0; g_classOff=0;
+        g_objField=0; g_objChunks=0; g_numObjects=0; g_classOff=0; g_objectsChunked=false;
         g_world=0; g_pc=0; g_camMgr=0; g_selfPawn=0; g_level=0; g_actorCount=0;
     }
     g_ready=false;
     collectImages();
+    g_nameTrials=0; g_nameEntryFailures=0; g_nameLayoutFailures=0;
+    g_nameTextFailures=0; g_nameScoreFailures=0;
+    size_t segments=0;
+    for (const Img& image:g_imgs) segments+=image.data.size();
+    uint64_t header=0;
+    const struct mach_header *mainHeader=nullptr;
+    for (const Img& image:g_imgs) {
+        if (image.path.find(".app/")!=std::string::npos && image.path.find("/Frameworks/")==std::string::npos) {
+            mainHeader=(const struct mach_header *)image.base;
+            break;
+        }
+    }
+    bool headerOK=mainHeader && memRead((uintptr_t)mainHeader,&header,sizeof(header));
+    zkLog("[diag-v2] images=%zu dataSegments=%zu mainHeaderRead=%d magic=0x%x",g_imgs.size(),segments,headerOK?1:0,(unsigned)(header&0xffffffff));
 
     // GNames
     if (g_off.GNames) {
@@ -562,6 +621,8 @@ bool coreInit(bool force) {
     }
     if (!g_nameChunks && !discoverGNames()) {
         zkLog("[core] GNames NOT FOUND");
+        zkLog("[diag-v2] names trials=%llu entryFailure=%llu layoutFailure=%llu textFailure=%llu scoreFailure=%llu",(unsigned long long)g_nameTrials,(unsigned long long)g_nameEntryFailures,(unsigned long long)g_nameLayoutFailures,(unsigned long long)g_nameTextFailures,(unsigned long long)g_nameScoreFailures);
+        zkLog("[diag-v2] Supported name model: pointer chunks and None entry. Failure does not establish a valid game offset.");
         return false;
     }
     zkLog("[core] GNames chunks=%p nameOff=0x%x wide=%d", (void*)g_nameChunks, g_nameOff, g_wide ? 1 : 0);
