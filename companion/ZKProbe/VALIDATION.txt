@@ -1,0 +1,3 @@
+PASS: actual JS parser boundaries, alignment, wide entry, limits and pointer precision
+PASS: JavaScript syntax; static parser bounds and background startup checks.
+NOT RUN: C++ sanitizer tests, iOS compilation/link/signing, Frida on device, runtime name-pool validation.

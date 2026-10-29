@@ -1,0 +1,7 @@
+{
+  "input_sha256": "e102e3dc11e96f9d8a4176427220ea9ec75a4dc59374855c64b5a98c11e693a7",
+  "input": "pubg-gnames46.zip",
+  "purpose": "experimental read-only runtime diagnostics",
+  "model_verified_for_pubg46": false,
+  "ios_build_tested": false
+}

@@ -1,0 +1,28 @@
+name: Build ZKProbe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.4'
+      - name: Install signing tool
+        run: brew install ldid-procursus
+      - name: Test parser and build
+        working-directory: companion/ZKProbe
+        run: |
+          perl -pi -e 's/\r$//' build.sh src/* tests/*
+          clang++ -std=c++17 -fsanitize=address,undefined -g tests/parser_test.cpp -o "$RUNNER_TEMP/zkprobe-parser-test"
+          "$RUNNER_TEMP/zkprobe-parser-test"
+          bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZKProbe-diagnostic
+          path: companion/ZKProbe/artifacts/*
+          if-no-files-found: error

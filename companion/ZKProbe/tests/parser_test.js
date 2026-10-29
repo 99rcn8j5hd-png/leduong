@@ -1,0 +1,16 @@
+const assert=require('node:assert/strict');
+const {parseEntry,walkBlock,ptrBytes}=require('../frida/probe.js');
+const a=Uint8Array.from([8,0,78,111,110,101]);
+assert.equal(parseEntry(a,0).name,'None');
+assert.equal(parseEntry(a,0).next,6);
+assert.equal(parseEntry(a.subarray(0,5),0),null);
+assert.equal(parseEntry(new Uint8Array(0),0),null);
+assert.equal(parseEntry(Uint8Array.from([0,0]),0),null);
+assert.equal(parseEntry(Uint8Array.from([0xff,0xff]),0),null);
+const wide=Uint8Array.from([3,0,65,0]);
+assert.equal(parseEntry(wide,0).name,'A');
+const two=Uint8Array.from([...a,2,0,65,0]);
+assert.equal(walkBlock(two,40).length,2);
+assert.equal(ptrBytes({toString:()=> '0xffffffffffffffff'}),'ff ff ff ff ff ff ff ff');
+assert.equal(ptrBytes({toString:()=> '0x100000000'}),'00 00 00 00 01 00 00 00');
+console.log('PASS: actual JS parser boundaries, alignment, wide entry, limits and pointer precision');
