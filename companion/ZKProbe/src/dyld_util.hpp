@@ -12,36 +12,21 @@
 #include <vector>
 #include <algorithm>
 #include <chrono>
+#include <thread>
+#include "scan_budget.hpp"
 
 namespace zk {
-
-// Shared budget for the complete diagnostic run; partial scans are not conclusive.
-struct ScanBudget {
-    size_t bytes=0;
-    bool exhausted=false;
-    std::chrono::steady_clock::time_point start=std::chrono::steady_clock::now();
-};
-inline ScanBudget& scanBudget() { static ScanBudget state; return state; }
-inline void resetScanBudget() { scanBudget()=ScanBudget{}; }
-inline bool allowScan(size_t bytes) {
-    auto &b=scanBudget();
-    if(b.exhausted) return false;
-    if(bytes>size_t(2ull<<30)-b.bytes ||
-       std::chrono::steady_clock::now()-b.start>std::chrono::seconds(90)) {
-        b.exhausted=true;
-        fprintf(stderr,"[ZKProbe] scan budget exhausted; result INCOMPLETE\n");
-        return false;
-    }
-    b.bytes+=bytes; return true;
-}
 
 // ---------- read an toan (khong crash khi dia chi rac) ----------
 inline bool rd(uintptr_t addr, void *out, size_t n) {
     if (!addr || !out || !n || n > UINTPTR_MAX-addr) return false;
+    if (!allowRead(n)) return false;
     vm_size_t got = 0;
     kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)addr,
                                          (vm_size_t)n, (vm_address_t)out, &got);
-    return kr == KERN_SUCCESS && got == n;
+    bool ok = kr == KERN_SUCCESS && got == n;
+    if (!ok) ++scanBudget().readFailures;
+    return ok;
 }
 
 template <class T> inline T rdv(uintptr_t addr) {
@@ -65,7 +50,8 @@ inline const std::vector<Region> &allRegions() {
     if (!cache.empty()) return cache;
 
     vm_address_t addr = 0;
-    while (true) {
+    size_t visited=0;
+    while (visited++ < 8000 && budgetTimeOK()) {
         vm_size_t size = 0;
         vm_region_basic_info_data_64_t info;
         mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64;
@@ -187,7 +173,7 @@ inline bool belongsToMainImage(uintptr_t addr) {
 }
 
 // ---------- quet vung RW theo tung khoi (tranh cap phat GB) ----------
-const size_t kScanStep = 256u << 10; // 256 KB per read; bounded buffers
+const size_t kScanStep = 64u << 10; // 64 KB per read; bounded buffers
 
 template <class F> void scanWritable(F cb) {
     const std::vector<Region> &regs = allRegions();
@@ -201,6 +187,7 @@ template <class F> void scanWritable(F cb) {
             if (!allowScan(want)) return;
             if (!rd(a, buf.data(), want)) continue;
             cb(a, buf.data(), want);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
 }
@@ -222,6 +209,7 @@ template <class F> void scanImageData(uintptr_t imgBase, F cb) {
             if (!allowScan(want)) return;
             if (!rd(a, buf.data(), want)) continue;
             cb(a, buf.data(), want);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
         }
     }
 }
