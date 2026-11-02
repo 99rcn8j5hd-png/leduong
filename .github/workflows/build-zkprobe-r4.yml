@@ -1,12 +1,12 @@
 # Complete source snapshot; no dependency on uploaded companion files.
-name: Build ZKProbe R25 Manual Tuning Menu
+name: Build ZKProbe R25 Manual Tuning Menu ARM Runner
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-15-intel
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: maxim-lobanov/setup-xcode@v1
