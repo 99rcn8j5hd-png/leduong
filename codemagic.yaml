@@ -1,0 +1,58 @@
+workflows:
+  zkprobe-r76:
+    name: ZKProbe R76 - M2
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      xcode: '16.4'
+    scripts:
+      - name: Prepare and verify existing source snapshot
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR"
+          python3 - <<'PY'
+          from pathlib import Path
+          import ast, hashlib, json, re
+          workflow = Path('.github/workflows/build-zkprobe-r4.yml').read_text('utf-8')
+          match = re.search(r"sources=json.loads\(r'''(.*?)'''\)", workflow, re.S)
+          hashes = re.search(r'^\s+expected=(.*)$', workflow, re.M)
+          if not match or not hashes:
+              raise SystemExit('Source snapshot or hash manifest missing')
+          sources = json.loads(match[1])
+          expected = ast.literal_eval(hashes[1])
+          if set(sources) != set(expected):
+              raise SystemExit('Source/hash manifest mismatch')
+          root = Path('.codemagic-source').resolve()
+          for name, content in sources.items():
+              dest = (root / name).resolve()
+              if not dest.is_relative_to(root):
+                  raise SystemExit('Source path outside build directory')
+              data = content.encode('utf-8')
+              if hashlib.sha256(data).hexdigest() != expected[name]:
+                  raise SystemExit('Hash mismatch: ' + name)
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(data)
+          print('Verified', len(sources), 'source files')
+          PY
+      - name: Run C++ checks
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/.codemagic-source"
+          mkdir -p build/tests
+          for unit in bones_projection live_pose names overlay_style player_aim session feedback fixed_profile menu_geometry; do
+            xcrun clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc -Isrc/vng07 "tests/vng07/test_${unit}.cpp" -o "build/tests/${unit}"
+            "build/tests/${unit}"
+          done
+      - name: Build and sign dylib
+        script: |
+          set -euo pipefail
+          export HOMEBREW_NO_AUTO_UPDATE=1
+          if ! command -v ldid >/dev/null 2>&1; then
+            brew install ldid-procursus
+          fi
+          cd "$CM_BUILD_DIR/.codemagic-source"
+          xcodebuild -version
+          bash build.sh
+          test -s artifacts/ZKProbe.dylib
+    artifacts:
+      - .codemagic-source/artifacts/*
