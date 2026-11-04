@@ -1,6 +1,6 @@
 workflows:
-  zkprobe-r82:
-    name: ZKProbe R82 - M2
+  zkprobe-r83:
+    name: ZKProbe R83 - M2
     instance_type: mac_mini_m2
     max_build_duration: 30
     environment:
@@ -39,7 +39,7 @@ workflows:
           set -euo pipefail
           cd "$CM_BUILD_DIR/.codemagic-source"
           mkdir -p build/tests
-          for unit in bones_projection live_pose names overlay_style player_aim session feedback fixed_profile menu_geometry recoil_parameters vertical; do
+          for unit in bones_projection live_pose names overlay_style player_aim session feedback fixed_profile menu_geometry recoil_parameters vertical sequence; do
             xcrun clang++ -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined -Isrc -Isrc/vng07 "tests/vng07/test_${unit}.cpp" -o "build/tests/${unit}"
             "build/tests/${unit}"
           done
