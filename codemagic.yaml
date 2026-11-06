@@ -1,7 +1,7 @@
 workflows:
   zkprobe-aim-bot06:
-    name: ZKProbe AIM BOT-06 M4
-    instance_type: mac_mini_m4
+    name: ZKProbe AIM BOT-06 M2
+    instance_type: mac_mini_m2
     max_build_duration: 30
     environment:
       xcode: latest
