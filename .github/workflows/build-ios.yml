@@ -1,0 +1,34 @@
+name: Build iPhone binaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    defaults:
+      run:
+        working-directory: "helper_interface_v2 (2)/helper_interface_v2"
+
+    steps:
+      - name: Download source
+        uses: actions/checkout@v4
+
+      - name: Check iPhone SDK
+        run: xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Build
+        run: make -f build/Makefile ios CXX=clang++
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: iphone-binaries
+          path: |
+            helper_interface_v2 (2)/helper_interface_v2/build/out/helper
+            helper_interface_v2 (2)/helper_interface_v2/build/out/dump_offsets
+          if-no-files-found: error
