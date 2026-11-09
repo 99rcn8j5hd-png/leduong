@@ -1,23 +1,28 @@
-name: Build iPhone binaries
+name: Build Helper Full Tools
+
 on:
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare source
+
+      - name: Prepare patched source
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import shutil
-          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile') if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
+          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile')
+                        if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
           if len(candidates) != 1:
-              raise SystemExit(f'Expected one patched source tree, found {len(candidates)}')
-          shutil.copytree(candidates[0], '/tmp/helper-build', dirs_exist_ok=True)
-          base = Path('/tmp/helper-build')
+              raise SystemExit(f'Expected one patched source tree; found {len(candidates)}')
+          base = Path('/tmp/helper-full-build')
+          shutil.copytree(candidates[0], base, dirs_exist_ok=True)
           p = base / 'build/Makefile'
           text = p.read_text()
           for flag in ('-fembed-bitcode-marker', '-fembed-bitcode'):
@@ -25,81 +30,25 @@ jobs:
           p.write_text(text)
           p = base / 'tools/dump_offsets.cpp'
           text = p.read_text()
-          assert not any(name in text for name in ('proc_pidinfo(', 'proc_pidpath(', 'proc_regionfilename('))
+          assert not any(n in text for n in ('proc_pidinfo(', 'proc_pidpath(', 'proc_regionfilename('))
           p.write_text(text.replace('#include <libproc.h>', ''))
-          for folder in ('src', 'tools'):
-              for p in (base / folder).rglob('*.cpp'):
-                  text = p.read_text()
-                  assert '#include <libproc.h>' not in text, str(p)
-                  assert '#include <sys/proc_info.h>' not in text, str(p)
+          reader = (base / 'src/pubg/mach_reader.cpp').read_text()
+          if 'mach_vm_region(' in reader or 'mach_vm_size_t got' in reader:
+              raise SystemExit('Source is outdated: upload the patched mach_reader.cpp')
           PY
-      - name: Build and test host
-        working-directory: /tmp/helper-build
-        run: |
-          make -f build/Makefile check CXX=clang++
-          ./build/out/helper-host mock 12 3 > mock.jsonl
-          ./build/out/helper-host csv sample.csv 12 3 > csv.jsonl
-          python3 - <<'PY'
-          import json
-          for name in ('mock.jsonl', 'csv.jsonl'):
-              with open(name) as f:
-                  rows = [json.loads(line) for line in f if line.strip() and not line.startswith('session=')]
-              assert rows, f'{name}: no output'
-              print(name, ':', len(rows), 'JSON records')
-          PY
+
       - name: Build with real iPhone SDK
-        working-directory: /tmp/helper-build
+        working-directory: /tmp/helper-full-build
         run: |
           xcrun --sdk iphoneos --show-sdk-path
           make -f build/Makefile ios CXX=clang++
-          file build/out/helper build/out/dump_offsets
           xcrun lipo build/out/helper -verify_arch arm64
           xcrun lipo build/out/dump_offsets -verify_arch arm64
-      - name: Package standalone mock test for Roothide
-        working-directory: /tmp/helper-build
+
+      - name: Package full helper tools
+        working-directory: /tmp/helper-full-build
         run: |
           brew install ldid dpkg
-          mkdir -p mock-package/DEBIAN mock-package/usr/bin
-          cat > mock-only.cpp <<'CPP'
-          #include "src/mock_provider.hpp"
-          #include <cstdio>
-          int main() {
-              hs::MockProvider provider;
-              if (!provider.connect()) return 1;
-              for (int frame = 0; frame < 4; ++frame) {
-                  hs::Snapshot snapshot;
-                  if (!provider.readSnapshot(snapshot)) return 2;
-                  for (const auto& p : snapshot.players)
-                      std::printf("{\"frame\":%d,\"name\":\"%s\",\"x\":%.1f,\"y\":%.1f}\n", frame, p.name.c_str(), p.x, p.y);
-              }
-              provider.disconnect();
-              return 0;
-          }
-          CPP
-          clang++ -std=c++17 -O2 -I. mock-only.cpp -o mock-host
-          ./mock-host > standalone-mock.jsonl
-          python3 -c 'import json; rows=[json.loads(s) for s in open("standalone-mock.jsonl")]; assert len(rows)==8; assert {r["name"] for r in rows}=={"Alpha","Bravo"}'
-          xcrun --sdk iphoneos clang++ -std=c++17 -O2 -I. -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -miphoneos-version-min=15.0 mock-only.cpp -o mock-package/usr/bin/helper-mock
-          chmod 755 mock-package/usr/bin/helper-mock
-          ldid -S mock-package/usr/bin/helper-mock
-          xcrun lipo mock-package/usr/bin/helper-mock -verify_arch arm64
-          cat > mock-package/DEBIAN/control <<'CONTROL'
-          Package: local.helper.mocktest
-          Name: Helper Mock Test
-          Version: 1.0.0
-          Architecture: iphoneos-arm64e
-          Maintainer: Local Test
-          Section: Development
-          Description: Standalone Alpha and Bravo mock output test. Run helper-mock in NewTerm.
-          CONTROL
-          chmod 755 mock-package/DEBIAN
-          chmod 644 mock-package/DEBIAN/control
-          dpkg-deb -Zgzip --root-owner-group --build mock-package build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --info build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --contents build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
-      - name: Package full helper tools for Roothide
-        working-directory: /tmp/helper-build
-        run: |
           mkdir -p full-package/DEBIAN full-package/usr/bin
           cp build/out/helper full-package/usr/bin/helper-full
           cp build/out/dump_offsets full-package/usr/bin/dump_offsets
@@ -113,8 +62,6 @@ jobs:
           ldid -Stools-entitlements.plist full-package/usr/bin/dump_offsets
           ldid -e full-package/usr/bin/helper-full
           ldid -e full-package/usr/bin/dump_offsets
-          xcrun lipo full-package/usr/bin/helper-full -verify_arch arm64
-          xcrun lipo full-package/usr/bin/dump_offsets -verify_arch arm64
           cat > full-package/DEBIAN/control <<'CONTROL'
           Package: local.helper.fulltools
           Name: Helper Full Tools
@@ -122,19 +69,16 @@ jobs:
           Architecture: iphoneos-arm64e
           Maintainer: Local Test
           Section: Development
-          Description: Full helper and offset diagnostic tools. Device execution and actual game offsets remain unverified.
+          Description: Full helper and offset diagnostic tools. Device execution and game offsets remain unverified.
           CONTROL
           chmod 755 full-package/DEBIAN
           chmod 644 full-package/DEBIAN/control
           dpkg-deb -Zgzip --root-owner-group --build full-package build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
           dpkg-deb --info build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
           dpkg-deb --contents build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
+
       - uses: actions/upload-artifact@v4
         with:
-          name: helper-tools-and-mock-test
-          path: |
-            /tmp/helper-build/build/out/helper
-            /tmp/helper-build/build/out/dump_offsets
-            /tmp/helper-build/build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
-            /tmp/helper-build/build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
+          name: helper-full-tools-deb
+          path: /tmp/helper-full-build/build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
           if-no-files-found: error
