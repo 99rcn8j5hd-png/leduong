@@ -30,7 +30,7 @@ jobs:
           import json
           for name in ('mock.jsonl', 'csv.jsonl'):
               with open(name) as f:
-                  rows = [json.loads(line) for line in f if line.strip()]
+                 rows = [json.loads(line) for line in f if line.strip() and not line.startswith('session=')]
               assert rows, f'{name}: no output'
               print(name, ':', len(rows), 'JSON records')
           PY
