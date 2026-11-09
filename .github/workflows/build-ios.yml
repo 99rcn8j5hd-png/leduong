@@ -55,10 +55,53 @@ jobs:
           file build/out/helper build/out/dump_offsets
           xcrun lipo build/out/helper -verify_arch arm64
           xcrun lipo build/out/dump_offsets -verify_arch arm64
+      - name: Package standalone mock test for Roothide
+        working-directory: /tmp/helper-build
+        run: |
+          brew install ldid dpkg
+          mkdir -p mock-package/DEBIAN mock-package/usr/bin
+          cat > mock-only.cpp <<'CPP'
+          #include "src/mock_provider.hpp"
+          #include <cstdio>
+          int main() {
+              hs::MockProvider provider;
+              if (!provider.connect()) return 1;
+              for (int frame = 0; frame < 4; ++frame) {
+                  hs::Snapshot snapshot;
+                  if (!provider.readSnapshot(snapshot)) return 2;
+                  for (const auto& p : snapshot.players)
+                      std::printf("{\"frame\":%d,\"name\":\"%s\",\"x\":%.1f,\"y\":%.1f}\n", frame, p.name.c_str(), p.x, p.y);
+              }
+              provider.disconnect();
+              return 0;
+          }
+          CPP
+          clang++ -std=c++17 -O2 -I. mock-only.cpp -o mock-host
+          ./mock-host > standalone-mock.jsonl
+          python3 -c 'import json; rows=[json.loads(s) for s in open("standalone-mock.jsonl")]; assert len(rows)==8; assert {r["name"] for r in rows}=={"Alpha","Bravo"}'
+          xcrun --sdk iphoneos clang++ -std=c++17 -O2 -I. -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -miphoneos-version-min=15.0 mock-only.cpp -o mock-package/usr/bin/helper-mock
+          chmod 755 mock-package/usr/bin/helper-mock
+          ldid -S mock-package/usr/bin/helper-mock
+          xcrun lipo mock-package/usr/bin/helper-mock -verify_arch arm64
+          cat > mock-package/DEBIAN/control <<'CONTROL'
+          Package: local.helper.mocktest
+          Name: Helper Mock Test
+          Version: 1.0.0
+          Architecture: iphoneos-arm64e
+          Maintainer: Local Test
+          Section: Development
+          Description: Standalone Alpha and Bravo mock output test. Run helper-mock in NewTerm.
+          CONTROL
+          chmod 755 mock-package/DEBIAN
+          chmod 644 mock-package/DEBIAN/control
+          dpkg-deb -Zgzip --root-owner-group --build mock-package build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --info build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --contents build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
       - uses: actions/upload-artifact@v4
         with:
-          name: iphone-binaries-unsigned
+          name: helper-build-and-mock-test
           path: |
             /tmp/helper-build/build/out/helper
             /tmp/helper-build/build/out/dump_offsets
+            /tmp/helper-build/build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
           if-no-files-found: error
