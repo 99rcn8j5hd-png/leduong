@@ -10,23 +10,20 @@ jobs:
       - name: Write standalone diagnostic source
         run: |
           cat > task-port-check.cpp <<'CPP'
-          // Diagnostic only: reads this process and its own cooperative child.
+          // Diagnostic only: reads this process and a separately launched cooperative sample.
           // No third-party target, kernel reader, or security policy changes.
           #include <mach/mach.h>
           #include <mach/mach_error.h>
           #include <mach/vm_map.h>
           #include <mach-o/dyld.h>
-          #include <spawn.h>
-          #include <sys/wait.h>
-          #include <poll.h>
-          #include <signal.h>
           #include <unistd.h>
           #include <cerrno>
           #include <cstdint>
           #include <cstdio>
           #include <cstring>
+          #include <cstdlib>
+          #include <climits>
           
-          extern char** environ;
           static_assert(sizeof(vm_address_t) == 8, "64-bit target required");
           static volatile uint64_t marker = 0;
           
@@ -61,81 +58,68 @@ jobs:
               return ok;
           }
           
+          
+          static bool number(const char* text, int base, uint64_t& value) {
+              if (!text || !*text || *text == '-' || *text == '+') return false;
+              char* end = nullptr;
+              errno = 0;
+              unsigned long long parsed = std::strtoull(text, &end, base);
+              if (errno || end == text || *end) return false;
+              value = parsed;
+              return true;
+          }
+          
           int main(int argc, char** argv) {
               setvbuf(stdout, nullptr, _IONBF, 0);
               marker = 0x6197A52B84C3D601ULL ^ static_cast<uint64_t>(getpid());
-              if (argc == 2 && std::strcmp(argv[1], "--child") == 0) {
-                  std::printf("%d %llx %llx\n", getpid(),
-                      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&marker)),
-                      static_cast<unsigned long long>(marker));
-                  for (;;) pause();
-              }
-              if (argc != 1) {
-                  std::fprintf(stderr, "usage: task-port-check\n");
+              const bool target_mode = argc == 2 && std::strcmp(argv[1], "--target") == 0;
+              const bool probe_mode = argc == 5 && std::strcmp(argv[1], "--probe") == 0;
+              if (argc != 1 && !target_mode && !probe_mode) {
+                  std::fprintf(stderr, "usage: task-port-check [--target | --probe PID ADDRESS_HEX VALUE_HEX]\n");
                   return 2;
               }
-              std::printf("task-port-check v1 pid=%d uid=%d euid=%d\n", getpid(), getuid(), geteuid());
-              const uint64_t address = reinterpret_cast<uintptr_t>(&marker);
-              const uint64_t expected = marker;
-              bool t1 = check_read(mach_task_self(), address, expected);
-              std::printf("TEST1 self task + read: %s\n", t1 ? "PASS" : "FAIL");
-              bool t2 = attach_and_read(getpid(), address, expected);
-              std::printf("TEST2 task_for_pid(self) + read: %s\n", t2 ? "PASS" : "FAIL");
-          
+              uint64_t target_pid = 0, target_address = 0, target_value = 0;
+              if (probe_mode && (!number(argv[2], 10, target_pid) || !target_pid || target_pid > INT_MAX ||
+                  !number(argv[3], 16, target_address) || !target_address ||
+                  !number(argv[4], 16, target_value))) {
+                  std::fprintf(stderr, "Invalid probe arguments. Copy the exact command from --target.\n");
+                  return 2;
+              }
+              std::printf("task-port-check v1.1 pid=%d uid=%d euid=%d\n", getpid(), getuid(), geteuid());
               char executable[4096];
               uint32_t capacity = sizeof(executable);
-              int fds[2];
-              if (_NSGetExecutablePath(executable, &capacity) != 0 || pipe(fds) != 0) {
-                  std::printf("TEST3 child: ERROR setup errno=%d\n", errno);
+              if (_NSGetExecutablePath(executable, &capacity) == 0)
+                  std::printf("executable=%s\n", executable);
+              if (target_mode) {
+                  std::printf("SAMPLE READY. Keep this terminal open. In a SECOND terminal run:\n");
+                  std::printf("sudo task-port-check --probe %d %llx %llx\n", getpid(),
+                      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&marker)),
+                      static_cast<unsigned long long>(marker));
+                  std::printf("This process publishes its own marker only. Ctrl+C stops it.\n");
+                  for (;;) pause();
+              }
+              const uint64_t address = reinterpret_cast<uintptr_t>(&marker);
+              const uint64_t expected = marker;
+              const bool t1 = check_read(mach_task_self(), address, expected);
+              std::printf("TEST1 self task + read: %s\n", t1 ? "PASS" : "FAIL");
+              const bool t2 = attach_and_read(getpid(), address, expected);
+              std::printf("TEST2 task_for_pid(self) + read: %s\n", t2 ? "PASS" : "FAIL");
+              if (!probe_mode) {
+                  std::printf("TEST3 cooperative sample: NOT RUN\n");
+                  std::printf("Start task-port-check --target in one terminal and copy its probe command into a second terminal.\n");
+                  return t1 && t2 ? 0 : 1;
+              }
+              if (target_pid == static_cast<uint64_t>(getpid())) {
+                  std::fprintf(stderr, "TEST3 ERROR: target must be the separate sample process.\n");
                   return 2;
               }
-              posix_spawn_file_actions_t actions;
-              int setup = posix_spawn_file_actions_init(&actions);
-              if (setup) { close(fds[0]); close(fds[1]); return 2; }
-              setup = posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
-              if (!setup) setup = posix_spawn_file_actions_addclose(&actions, fds[0]);
-              if (!setup) setup = posix_spawn_file_actions_addclose(&actions, fds[1]);
-              char child_arg[] = "--child";
-              char* child_argv[] = {executable, child_arg, nullptr};
-              pid_t child = -1;
-              const int spawn_result = setup ? setup : posix_spawn(&child, executable, &actions, nullptr, child_argv, environ);
-              posix_spawn_file_actions_destroy(&actions);
-              close(fds[1]);
-              if (spawn_result) {
-                  close(fds[0]);
-                  std::printf("TEST3 child: ERROR spawn: %s (%d)\n", strerror(spawn_result), spawn_result);
-                  return 2;
-              }
-              bool ready = false;
-              unsigned long long child_address = 0, child_value = 0;
-              int reported_pid = -1;
-              pollfd poll_fd{fds[0], POLLIN, 0};
-              const int polled = poll(&poll_fd, 1, 5000);
-              if (polled > 0 && (poll_fd.revents & POLLIN)) {
-                  char line[160] = {};
-                  const ssize_t n = read(fds[0], line, sizeof(line) - 1);
-                  if (n > 0) ready = sscanf(line, "%d %llx %llx", &reported_pid, &child_address, &child_value) == 3
-                      && reported_pid == child && child_address != 0;
-              }
-              close(fds[0]);
-              bool t3 = false;
-              if (ready) {
-                  t3 = attach_and_read(child, child_address, child_value);
-                  std::printf("TEST3 task_for_pid(own child) + read: %s\n", t3 ? "PASS" : "FAIL");
-              } else {
-                  std::printf("TEST3 child: ERROR handshake (poll=%d revents=%d)\n", polled, poll_fd.revents);
-              }
-              kill(child, SIGTERM);
-              int status = 0;
-              while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-              if (!ready) {
-                  if (WIFSIGNALED(status)) std::printf("  child terminated by signal %d\n", WTERMSIG(status));
-                  else if (WIFEXITED(status)) std::printf("  child exit status %d\n", WEXITSTATUS(status));
-              }
-              std::printf("SUMMARY self_read=%s self_attach=%s own_child=%s\n",
-                  t1 ? "PASS" : "FAIL", t2 ? "PASS" : "FAIL", !ready ? "ERROR" : t3 ? "PASS" : "FAIL");
-              std::printf("Results apply only to this test and its child; they do not establish access to PUBG.\n");
-              return !ready ? 2 : (t1 && t2 && t3) ? 0 : 1;
+              const bool t3 = attach_and_read(static_cast<pid_t>(target_pid), target_address, target_value);
+              std::printf("TEST3 task_for_pid(cooperative sample) + read: %s\n", t3 ? "PASS" : "FAIL");
+              std::printf("SUMMARY self_read=%s self_attach=%s sample_attach_read=%s\n",
+                  t1 ? "PASS" : "FAIL", t2 ? "PASS" : "FAIL", t3 ? "PASS" : "FAIL");
+              std::printf("A failed read can mean that the sample exited or its arguments are stale.\n");
+              std::printf("These results do not establish access to PUBG or a need for kernel access.\n");
+              return t1 && t2 && t3 ? 0 : 1;
           }
           CPP
       - name: Compile and smoke test on macOS
@@ -165,17 +149,17 @@ jobs:
           cat > stage/DEBIAN/control <<'CONTROL'
           Package: local.helper.taskportcheck
           Name: Task Port Check
-          Version: 1.0.0
+          Version: 1.1.0
           Architecture: iphoneos-arm64e
           Maintainer: Local Test
           Section: Development
-          Description: Three task-port diagnostics limited to this executable and its own cooperative child.
+          Description: Three task-port diagnostics limited to this executable and a separately launched cooperative sample.
           CONTROL
           chmod 755 stage/DEBIAN
           chmod 644 stage/DEBIAN/control
-          dpkg-deb -Zgzip --root-owner-group --build stage out/task-port-check_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --info out/task-port-check_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --contents out/task-port-check_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb -Zgzip --root-owner-group --build stage out/task-port-check_1.1.0_iphoneos-arm64e.deb
+          dpkg-deb --info out/task-port-check_1.1.0_iphoneos-arm64e.deb
+          dpkg-deb --contents out/task-port-check_1.1.0_iphoneos-arm64e.deb
           cp task-port-check.cpp host-check.log out/
       - uses: actions/upload-artifact@v4
         with:
