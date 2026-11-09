@@ -19,6 +19,12 @@ jobs:
           if len(candidates) != 1:
               raise SystemExit(f'Expected one patched source tree, found {len(candidates)}')
           shutil.copytree(candidates[0], '/tmp/helper-build', dirs_exist_ok=True)
+          # Remove obsolete bitcode flags from previously uploaded Makefiles.
+          makefile = Path('/tmp/helper-build/build/Makefile')
+          text = makefile.read_text()
+          for flag in ('-fembed-bitcode-marker', '-fembed-bitcode'):
+              text = text.replace(flag, '')
+          makefile.write_text(text)
           PY
       - name: Build and test host
         working-directory: /tmp/helper-build
@@ -30,7 +36,7 @@ jobs:
           import json
           for name in ('mock.jsonl', 'csv.jsonl'):
               with open(name) as f:
-                 rows = [json.loads(line) for line in f if line.strip() and not line.startswith('session=')]
+                  rows = [json.loads(line) for line in f if line.strip() and not line.startswith('session=')]
               assert rows, f'{name}: no output'
               print(name, ':', len(rows), 'JSON records')
           PY
