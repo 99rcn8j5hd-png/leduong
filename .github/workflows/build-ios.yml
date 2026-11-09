@@ -10,18 +10,20 @@ jobs:
   build:
     runs-on: macos-15-intel
 
-    defaults:
-      run:
-        working-directory: "helper_interface_v2 (2)/helper_interface_v2"
-
     steps:
       - name: Download source
         uses: actions/checkout@v4
+
+      - name: Prepare source
+        run: |
+          mkdir -p /tmp/helper-build
+          cp -R "helper_interface_v2 (2)/helper_interface_v2/." /tmp/helper-build/
 
       - name: Check iPhone SDK
         run: xcrun --sdk iphoneos --show-sdk-path
 
       - name: Build
+        working-directory: /tmp/helper-build
         run: make -f build/Makefile ios CXX=clang++
 
       - name: Upload binaries
@@ -29,6 +31,6 @@ jobs:
         with:
           name: iphone-binaries
           path: |
-            helper_interface_v2 (2)/helper_interface_v2/build/out/helper
-            helper_interface_v2 (2)/helper_interface_v2/build/out/dump_offsets
+            /tmp/helper-build/build/out/helper
+            /tmp/helper-build/build/out/dump_offsets
           if-no-files-found: error
