@@ -1,84 +1,184 @@
-name: Build Helper Full Tools
-
+name: Build Task Port Check
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Prepare patched source
+      - name: Write standalone diagnostic source
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import shutil
-          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile')
-                        if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
-          if len(candidates) != 1:
-              raise SystemExit(f'Expected one patched source tree; found {len(candidates)}')
-          base = Path('/tmp/helper-full-build')
-          shutil.copytree(candidates[0], base, dirs_exist_ok=True)
-          p = base / 'build/Makefile'
-          text = p.read_text()
-          for flag in ('-fembed-bitcode-marker', '-fembed-bitcode'):
-              text = text.replace(flag, '')
-          p.write_text(text)
-          p = base / 'tools/dump_offsets.cpp'
-          text = p.read_text()
-          assert not any(n in text for n in ('proc_pidinfo(', 'proc_pidpath(', 'proc_regionfilename('))
-          p.write_text(text.replace('#include <libproc.h>', ''))
-          reader = (base / 'src/pubg/mach_reader.cpp').read_text()
-          if 'mach_vm_region(' in reader or 'mach_vm_size_t got' in reader:
-              raise SystemExit('Source is outdated: upload the patched mach_reader.cpp')
-          PY
-
-      - name: Build with real iPhone SDK
-        working-directory: /tmp/helper-full-build
+          cat > task-port-check.cpp <<'CPP'
+          // Diagnostic only: reads this process and its own cooperative child.
+          // No third-party target, kernel reader, or security policy changes.
+          #include <mach/mach.h>
+          #include <mach/mach_error.h>
+          #include <mach/vm_map.h>
+          #include <mach-o/dyld.h>
+          #include <spawn.h>
+          #include <sys/wait.h>
+          #include <poll.h>
+          #include <signal.h>
+          #include <unistd.h>
+          #include <cerrno>
+          #include <cstdint>
+          #include <cstdio>
+          #include <cstring>
+          
+          extern char** environ;
+          static_assert(sizeof(vm_address_t) == 8, "64-bit target required");
+          static volatile uint64_t marker = 0;
+          
+          static bool check_read(task_t task, uint64_t address, uint64_t expected) {
+              uint64_t value = 0;
+              vm_size_t got = 0;
+              kern_return_t kr = vm_read_overwrite(task, static_cast<vm_address_t>(address),
+                  sizeof(value), reinterpret_cast<vm_address_t>(&value), &got);
+              if (kr != KERN_SUCCESS) {
+                  std::printf("  read: %s (%d)\n", mach_error_string(kr), kr);
+                  return false;
+              }
+              if (got != sizeof(value) || value != expected) {
+                  std::printf("  read mismatch: bytes=%llu value=%llx expected=%llx\n",
+                      static_cast<unsigned long long>(got),
+                      static_cast<unsigned long long>(value),
+                      static_cast<unsigned long long>(expected));
+                  return false;
+              }
+              return true;
+          }
+          
+          static bool attach_and_read(pid_t pid, uint64_t address, uint64_t expected) {
+              task_t port = MACH_PORT_NULL;
+              const kern_return_t kr = task_for_pid(mach_task_self(), pid, &port);
+              if (kr != KERN_SUCCESS) {
+                  std::printf("  task_for_pid(%d): %s (%d)\n", pid, mach_error_string(kr), kr);
+                  return false;
+              }
+              const bool ok = check_read(port, address, expected);
+              mach_port_deallocate(mach_task_self(), port);
+              return ok;
+          }
+          
+          int main(int argc, char** argv) {
+              setvbuf(stdout, nullptr, _IONBF, 0);
+              marker = 0x6197A52B84C3D601ULL ^ static_cast<uint64_t>(getpid());
+              if (argc == 2 && std::strcmp(argv[1], "--child") == 0) {
+                  std::printf("%d %llx %llx\n", getpid(),
+                      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(&marker)),
+                      static_cast<unsigned long long>(marker));
+                  for (;;) pause();
+              }
+              if (argc != 1) {
+                  std::fprintf(stderr, "usage: task-port-check\n");
+                  return 2;
+              }
+              std::printf("task-port-check v1 pid=%d uid=%d euid=%d\n", getpid(), getuid(), geteuid());
+              const uint64_t address = reinterpret_cast<uintptr_t>(&marker);
+              const uint64_t expected = marker;
+              bool t1 = check_read(mach_task_self(), address, expected);
+              std::printf("TEST1 self task + read: %s\n", t1 ? "PASS" : "FAIL");
+              bool t2 = attach_and_read(getpid(), address, expected);
+              std::printf("TEST2 task_for_pid(self) + read: %s\n", t2 ? "PASS" : "FAIL");
+          
+              char executable[4096];
+              uint32_t capacity = sizeof(executable);
+              int fds[2];
+              if (_NSGetExecutablePath(executable, &capacity) != 0 || pipe(fds) != 0) {
+                  std::printf("TEST3 child: ERROR setup errno=%d\n", errno);
+                  return 2;
+              }
+              posix_spawn_file_actions_t actions;
+              int setup = posix_spawn_file_actions_init(&actions);
+              if (setup) { close(fds[0]); close(fds[1]); return 2; }
+              setup = posix_spawn_file_actions_adddup2(&actions, fds[1], STDOUT_FILENO);
+              if (!setup) setup = posix_spawn_file_actions_addclose(&actions, fds[0]);
+              if (!setup) setup = posix_spawn_file_actions_addclose(&actions, fds[1]);
+              char child_arg[] = "--child";
+              char* child_argv[] = {executable, child_arg, nullptr};
+              pid_t child = -1;
+              const int spawn_result = setup ? setup : posix_spawn(&child, executable, &actions, nullptr, child_argv, environ);
+              posix_spawn_file_actions_destroy(&actions);
+              close(fds[1]);
+              if (spawn_result) {
+                  close(fds[0]);
+                  std::printf("TEST3 child: ERROR spawn: %s (%d)\n", strerror(spawn_result), spawn_result);
+                  return 2;
+              }
+              bool ready = false;
+              unsigned long long child_address = 0, child_value = 0;
+              int reported_pid = -1;
+              pollfd poll_fd{fds[0], POLLIN, 0};
+              const int polled = poll(&poll_fd, 1, 5000);
+              if (polled > 0 && (poll_fd.revents & POLLIN)) {
+                  char line[160] = {};
+                  const ssize_t n = read(fds[0], line, sizeof(line) - 1);
+                  if (n > 0) ready = sscanf(line, "%d %llx %llx", &reported_pid, &child_address, &child_value) == 3
+                      && reported_pid == child && child_address != 0;
+              }
+              close(fds[0]);
+              bool t3 = false;
+              if (ready) {
+                  t3 = attach_and_read(child, child_address, child_value);
+                  std::printf("TEST3 task_for_pid(own child) + read: %s\n", t3 ? "PASS" : "FAIL");
+              } else {
+                  std::printf("TEST3 child: ERROR handshake (poll=%d revents=%d)\n", polled, poll_fd.revents);
+              }
+              kill(child, SIGTERM);
+              int status = 0;
+              while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+              if (!ready) {
+                  if (WIFSIGNALED(status)) std::printf("  child terminated by signal %d\n", WTERMSIG(status));
+                  else if (WIFEXITED(status)) std::printf("  child exit status %d\n", WEXITSTATUS(status));
+              }
+              std::printf("SUMMARY self_read=%s self_attach=%s own_child=%s\n",
+                  t1 ? "PASS" : "FAIL", t2 ? "PASS" : "FAIL", !ready ? "ERROR" : t3 ? "PASS" : "FAIL");
+              std::printf("Results apply only to this test and its child; they do not establish access to PUBG.\n");
+              return !ready ? 2 : (t1 && t2 && t3) ? 0 : 1;
+          }
+          CPP
+      - name: Compile and smoke test on macOS
         run: |
-          xcrun --sdk iphoneos --show-sdk-path
-          make -f build/Makefile ios CXX=clang++
-          xcrun lipo build/out/helper -verify_arch arm64
-          xcrun lipo build/out/dump_offsets -verify_arch arm64
-
-      - name: Package full helper tools
-        working-directory: /tmp/helper-full-build
+          clang++ -std=c++17 -O2 -Wall -Wextra task-port-check.cpp -o task-port-check-host
+          status=0
+          ./task-port-check-host > host-check.log 2>&1 || status=$?
+          cat host-check.log
+          echo "Diagnostic exit status: $status (permission denial can be expected on this host)"
+          grep -q 'TEST1 self task + read: PASS' host-check.log
+      - name: Compile with real iPhone SDK
+        run: |
+          mkdir -p stage/DEBIAN stage/usr/bin out
+          xcrun --sdk iphoneos clang++ -std=c++17 -O2 -Wall -Wextra -arch arm64 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" -miphoneos-version-min=15.0 task-port-check.cpp -o stage/usr/bin/task-port-check
+          xcrun lipo stage/usr/bin/task-port-check -verify_arch arm64
+      - name: Sign and package diagnostic
         run: |
           brew install ldid dpkg
-          mkdir -p full-package/DEBIAN full-package/usr/bin
-          cp build/out/helper full-package/usr/bin/helper-full
-          cp build/out/dump_offsets full-package/usr/bin/dump_offsets
-          cat > tools-entitlements.plist <<'PLIST'
+          cat > entitlements.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0"><dict><key>task_for_pid-allow</key><true/></dict></plist>
           PLIST
-          chmod 755 full-package/usr/bin/helper-full full-package/usr/bin/dump_offsets
-          ldid -Stools-entitlements.plist full-package/usr/bin/helper-full
-          ldid -Stools-entitlements.plist full-package/usr/bin/dump_offsets
-          ldid -e full-package/usr/bin/helper-full
-          ldid -e full-package/usr/bin/dump_offsets
-          cat > full-package/DEBIAN/control <<'CONTROL'
-          Package: local.helper.fulltools
-          Name: Helper Full Tools
+          chmod 755 stage/usr/bin/task-port-check
+          ldid -Sentitlements.plist stage/usr/bin/task-port-check
+          ldid -e stage/usr/bin/task-port-check
+          cat > stage/DEBIAN/control <<'CONTROL'
+          Package: local.helper.taskportcheck
+          Name: Task Port Check
           Version: 1.0.0
           Architecture: iphoneos-arm64e
           Maintainer: Local Test
           Section: Development
-          Description: Full helper and offset diagnostic tools. Device execution and game offsets remain unverified.
+          Description: Three task-port diagnostics limited to this executable and its own cooperative child.
           CONTROL
-          chmod 755 full-package/DEBIAN
-          chmod 644 full-package/DEBIAN/control
-          dpkg-deb -Zgzip --root-owner-group --build full-package build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --info build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
-          dpkg-deb --contents build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
-
+          chmod 755 stage/DEBIAN
+          chmod 644 stage/DEBIAN/control
+          dpkg-deb -Zgzip --root-owner-group --build stage out/task-port-check_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --info out/task-port-check_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --contents out/task-port-check_1.0.0_iphoneos-arm64e.deb
+          cp task-port-check.cpp host-check.log out/
       - uses: actions/upload-artifact@v4
         with:
-          name: helper-full-tools-deb
-          path: /tmp/helper-full-build/build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
+          name: task-port-check-roothide
+          path: out/
           if-no-files-found: error
