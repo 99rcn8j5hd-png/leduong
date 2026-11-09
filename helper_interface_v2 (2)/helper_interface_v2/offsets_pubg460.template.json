@@ -1,0 +1,44 @@
+{
+  "_doc": "Mẫu rỗng — CHẠY tools/dump_offsets để sinh bản thật. Đừng điền tay số đoán.",
+  "game": "pubgm",
+  "version": "4.6.0",
+  "image": "",
+  "dumped_at": 0,
+
+  "gworld": 0,
+  "gobjects": 0,
+  "gnames": 0,
+  "gnames_deref": 0,
+  "gobjects_deref": 0,
+
+  "uobj_class": 16,
+  "uobj_name_index": 24,
+
+  "persist_level": 0,
+  "level_actors": 0,
+  "actor_root": 0,
+  "comp_xform": 0,
+  "pc_pawn": 0,
+  "pawn_player_state": 0,
+  "pawn_mesh": 0,
+  "mesh_bones": 0,
+  "ps_team": 0,
+  "ps_health": 0,
+  "ps_name": 0,
+  "pc_camera_mgr": 0,
+  "cam_pov_loc": 0,
+
+  "name_block_shift": 14,
+  "name_block_entries": 16384,
+  "name_entry_stride": 8,
+  "name_entry_hdr": 8,
+
+  "obj_chunk_shift": 13,
+  "obj_item_stride": 16,
+  "obj_item_object": 0,
+  "obj_num_offset": 12,
+
+  "bone_head": -1,
+  "bone_neck": -1,
+  "bone_root": -1
+}
