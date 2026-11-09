@@ -53,8 +53,8 @@ jobs:
           xcrun --sdk iphoneos --show-sdk-path
           make -f build/Makefile ios CXX=clang++
           file build/out/helper build/out/dump_offsets
-          xcrun lipo -verify_arch arm64 build/out/helper
-          xcrun lipo -verify_arch arm64 build/out/dump_offsets
+          xcrun lipo build/out/helper -verify_arch arm64
+          xcrun lipo build/out/dump_offsets -verify_arch arm64
       - uses: actions/upload-artifact@v4
         with:
           name: iphone-binaries-unsigned
