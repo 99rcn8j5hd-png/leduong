@@ -9,22 +9,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Prepare source
-        shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import shutil
-          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile')
-                        if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
+          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile') if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
           if len(candidates) != 1:
               raise SystemExit(f'Expected one patched source tree, found {len(candidates)}')
           shutil.copytree(candidates[0], '/tmp/helper-build', dirs_exist_ok=True)
-          # Remove obsolete bitcode flags from previously uploaded Makefiles.
-          makefile = Path('/tmp/helper-build/build/Makefile')
-          text = makefile.read_text()
+          base = Path('/tmp/helper-build')
+          p = base / 'build/Makefile'
+          text = p.read_text()
           for flag in ('-fembed-bitcode-marker', '-fembed-bitcode'):
               text = text.replace(flag, '')
-          makefile.write_text(text)
+          p.write_text(text)
+          p = base / 'tools/dump_offsets.cpp'
+          text = p.read_text()
+          assert not any(name in text for name in ('proc_pidinfo(', 'proc_pidpath(', 'proc_regionfilename('))
+          p.write_text(text.replace('#include <libproc.h>', ''))
+          for folder in ('src', 'tools'):
+              for p in (base / folder).rglob('*.cpp'):
+                  text = p.read_text()
+                  assert '#include <libproc.h>' not in text, str(p)
+                  assert '#include <sys/proc_info.h>' not in text, str(p)
           PY
       - name: Build and test host
         working-directory: /tmp/helper-build
