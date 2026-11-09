@@ -97,11 +97,44 @@ jobs:
           dpkg-deb -Zgzip --root-owner-group --build mock-package build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
           dpkg-deb --info build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
           dpkg-deb --contents build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
+      - name: Package full helper tools for Roothide
+        working-directory: /tmp/helper-build
+        run: |
+          mkdir -p full-package/DEBIAN full-package/usr/bin
+          cp build/out/helper full-package/usr/bin/helper-full
+          cp build/out/dump_offsets full-package/usr/bin/dump_offsets
+          cat > tools-entitlements.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>task_for_pid-allow</key><true/></dict></plist>
+          PLIST
+          chmod 755 full-package/usr/bin/helper-full full-package/usr/bin/dump_offsets
+          ldid -Stools-entitlements.plist full-package/usr/bin/helper-full
+          ldid -Stools-entitlements.plist full-package/usr/bin/dump_offsets
+          ldid -e full-package/usr/bin/helper-full
+          ldid -e full-package/usr/bin/dump_offsets
+          xcrun lipo full-package/usr/bin/helper-full -verify_arch arm64
+          xcrun lipo full-package/usr/bin/dump_offsets -verify_arch arm64
+          cat > full-package/DEBIAN/control <<'CONTROL'
+          Package: local.helper.fulltools
+          Name: Helper Full Tools
+          Version: 1.0.0
+          Architecture: iphoneos-arm64e
+          Maintainer: Local Test
+          Section: Development
+          Description: Full helper and offset diagnostic tools. Device execution and actual game offsets remain unverified.
+          CONTROL
+          chmod 755 full-package/DEBIAN
+          chmod 644 full-package/DEBIAN/control
+          dpkg-deb -Zgzip --root-owner-group --build full-package build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --info build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
+          dpkg-deb --contents build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
       - uses: actions/upload-artifact@v4
         with:
-          name: helper-build-and-mock-test
+          name: helper-tools-and-mock-test
           path: |
             /tmp/helper-build/build/out/helper
             /tmp/helper-build/build/out/dump_offsets
             /tmp/helper-build/build/out/helper-mock_1.0.0_iphoneos-arm64e.deb
+            /tmp/helper-build/build/out/helper-tools_1.0.0_iphoneos-arm64e.deb
           if-no-files-found: error
