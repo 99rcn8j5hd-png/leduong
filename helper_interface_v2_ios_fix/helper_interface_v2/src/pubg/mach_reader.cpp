@@ -4,7 +4,7 @@
 
 #include "proc_compat.hpp"
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include <mach/vm_map.h>
 #include <mach-o/loader.h>
 #include <signal.h>
 #include <unistd.h>
@@ -13,6 +13,8 @@
 #include <vector>
 
 namespace hs {
+
+static_assert(sizeof(vm_address_t) == 8, "This reader requires a 64-bit target");
 
 MachTaskReader::~MachTaskReader() {
     if (task_ != MACH_PORT_NULL && task_ != 0) mach_port_deallocate(mach_task_self(), task_);
@@ -32,22 +34,22 @@ bool MachTaskReader::attach(pid_t pid) {
 
 bool MachTaskReader::read(uint64_t addr, void* buf, size_t len) {
     if (!task_ || !buf || !len) return false;
-    mach_vm_size_t got = 0;
-    kern_return_t kr = mach_vm_read_overwrite(task_, (mach_vm_address_t)addr,
-                                              (mach_vm_size_t)len,
-                                              (mach_vm_address_t)buf, &got);
+    vm_size_t got = 0;
+    kern_return_t kr = vm_read_overwrite(task_, (vm_address_t)addr,
+                                              (vm_size_t)len,
+                                              (vm_address_t)buf, &got);
     return kr == KERN_SUCCESS && got == len;
 }
 
 bool MachTaskReader::valid(uint64_t addr, size_t len) {
     if (!task_ || !addr) return false;
     // page-align rồi hỏi region chứa địa chỉ
-    mach_vm_address_t a = addr & ~0xFFFULL;
-    mach_vm_size_t    sz = 0;
+    vm_address_t a = addr & ~0xFFFULL;
+    vm_size_t    sz = 0;
     vm_region_basic_info_data_64_t info;
     mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t obj = MACH_PORT_NULL;
-    kern_return_t kr = mach_vm_region(task_, &a, &sz, VM_REGION_BASIC_INFO_64,
+    kern_return_t kr = vm_region_64(task_, &a, &sz, VM_REGION_BASIC_INFO_64,
                                       (vm_region_info_t)&info, &count, &obj);
     if (obj != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), obj);
     if (kr != KERN_SUCCESS) return false;
@@ -67,17 +69,17 @@ bool MachTaskReader::resolveExecBase(const std::string& wantName) {
     char execPath[proc_compat::PROC_PIDPATHINFO_MAXSIZE] = {0};
     proc_compat::proc_pidpath(pid_, execPath, sizeof execPath);
 
-    mach_vm_address_t addr = 0;
+    vm_address_t addr = 0;
     uint64_t best = 0;
     bool     matched = false;
 
     while (true) {
-        mach_vm_size_t sz = 0;
+        vm_size_t sz = 0;
         vm_region_basic_info_data_64_t info;
         mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
         mach_port_t obj = MACH_PORT_NULL;
-        mach_vm_address_t cur = addr;
-        kern_return_t kr = mach_vm_region(task_, &cur, &sz, VM_REGION_BASIC_INFO_64,
+        vm_address_t cur = addr;
+        kern_return_t kr = vm_region_64(task_, &cur, &sz, VM_REGION_BASIC_INFO_64,
                                           (vm_region_info_t)&info, &count, &obj);
         if (obj != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), obj);
         if (kr != KERN_SUCCESS) break;
