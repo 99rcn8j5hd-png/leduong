@@ -1,35 +1,50 @@
 name: Build iPhone binaries
-
 on:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   build:
     runs-on: macos-15-intel
-
     steps:
-      - name: Download source
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Prepare source
+        shell: bash
         run: |
-          mkdir -p /tmp/helper-build
-          cp -R "helper_interface_v2 (2)/helper_interface_v2/." /tmp/helper-build/
-
-      - name: Check iPhone SDK
-        run: xcrun --sdk iphoneos --show-sdk-path
-
-      - name: Build
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+          candidates = [p.parent.parent for p in Path('.').rglob('build/Makefile')
+                        if (p.parent.parent / 'src/pubg/proc_compat.hpp').is_file()]
+          if len(candidates) != 1:
+              raise SystemExit(f'Expected one patched source tree, found {len(candidates)}')
+          shutil.copytree(candidates[0], '/tmp/helper-build', dirs_exist_ok=True)
+          PY
+      - name: Build and test host
         working-directory: /tmp/helper-build
-        run: make -f build/Makefile ios CXX=clang++
-
-      - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        run: |
+          make -f build/Makefile check CXX=clang++
+          ./build/out/helper-host mock 12 3 > mock.jsonl
+          ./build/out/helper-host csv sample.csv 12 3 > csv.jsonl
+          python3 - <<'PY'
+          import json
+          for name in ('mock.jsonl', 'csv.jsonl'):
+              with open(name) as f:
+                  rows = [json.loads(line) for line in f if line.strip()]
+              assert rows, f'{name}: no output'
+              print(name, ':', len(rows), 'JSON records')
+          PY
+      - name: Build with real iPhone SDK
+        working-directory: /tmp/helper-build
+        run: |
+          xcrun --sdk iphoneos --show-sdk-path
+          make -f build/Makefile ios CXX=clang++
+          file build/out/helper build/out/dump_offsets
+          xcrun lipo -verify_arch arm64 build/out/helper
+          xcrun lipo -verify_arch arm64 build/out/dump_offsets
+      - uses: actions/upload-artifact@v4
         with:
-          name: iphone-binaries
+          name: iphone-binaries-unsigned
           path: |
             /tmp/helper-build/build/out/helper
             /tmp/helper-build/build/out/dump_offsets
